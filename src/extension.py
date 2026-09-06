@@ -1,63 +1,57 @@
-import logging
 import knime.extension as knext
-
-LOGGER = logging.getLogger(__name__)
-
+import pandas as pd
+import fast_mRMR
 
 @knext.node(
-    name="My Template Node",
+    name="mRMR Feature Selector",
     node_type=knext.NodeType.LEARNER,
     icon_path="../icons/icon.png",
-    category="/",
+    category="/community/mRMR",
 )
-@knext.input_table(name="Input Data", description="We read data from here")
-# @knext.input_table(name="Tutorial: Input Data 2", description="We also read data from here") ### Tutorial step 11: Uncomment to create a new input port
-@knext.output_table(name="Output Data", description="Whatever the node has produced")
-class TemplateNode:
-    """Short one-line description of the node.
-    Long description of the node.
-    Can be multiple lines.
+@knext.input_table(name="X Table", description="Tabla de características (X)")
+@knext.input_table(name="Y Table", description="Tabla de etiquetas (Y)")
+@knext.output_table(name="Selected Features", description="Tabla X con solo las columnas seleccionadas")
+class MRMRNode:
+    """
+    Nodo que aplica mRMR para seleccionar las k características más relevantes
+    de la tabla X, usando la información de la tabla Y.
     """
 
-    ### Tutorial step 10: Uncomment all of the following parameters and the 'is_numeric' method to create your first dialogue ###
-    # (Restart KAP and drag&drop the node again from the node repository to let changes take effect)
-    # some_param = knext.IntParameter("Some Int Parameter", "The answer to everything", 42, min_value=0)
+    # Parámetro en el diálogo de configuración
+    k_features = knext.IntParameter(
+        label="Número de características",
+        description="Cantidad de features a seleccionar con mRMR",
+        default_value=5,
+        min_value=1,
+    )
 
-    # another_param = knext.StringParameter("Some String parameter", "The classic placeholder", "foobar")
+    def configure(self, configure_context, input_schema_1, input_schema_2):
+        # Devolvemos el mismo esquema de X (primer puerto) sin cambios
+        # (mismo número de columnas, solo filtramos en ejecución)
+        # return input_schema_1
+        return None
 
-    # double_param = knext.DoubleParameter("Double Parameter", "Just for test purposes", 3.0)
-
-    # boolean_param = knext.BoolParameter("Boolean Parameter", "also just for testing", True)
-
-    # column_param = knext.ColumnParameter()
-
-    # def is_numeric(column):  # Filter columns visible in the column_param for numeric ones
-    #     return (
-    #         column.ktype == knext.double()
-    #         or column.ktype == knext.int32()
-    #         or column.ktype == knext.int64()
-    #     )
-
-    # column_param = knext.ColumnParameter(label="label", description="description", port_index=0, column_filter=is_numeric)
-
-    def configure(self, configure_context, input_schema_1):
-        # def configure(self, configure_context, input_schema_1, input_schema_2):  ### Tutorial step 11: Uncomment to configure the new port (and comment out the previous configure header)
-        return input_schema_1
-        ### Tutorial step 12: Uncomment the following to adjust to the changes we do in this step in the execute method (and comment out the previous return statement)
-        # return input_schema_1.append(knext.Column(knext.double(), "column2"))
-        ### Tutorial step 13: Uncomment to set a warning for the configuration, which will be shown in the workflow
-        # configure_context.set_warning("This is a warning during configuration")
-
-    def execute(self, exec_context, input_1):
-        # def execute(self, exec_context, input_1, input_2):  ### Tutorial step 11: Uncomment to accept the new port (and comment out the previous execute header)
-        return input_1
-        ### Tutorial step 12: Uncomment the following lines to work with the new port (and comment out the previous return statement)
-        # input_1_pandas = input_1.to_pandas() # Transform the input table to some processable format (pandas or pyarrow)
-        # input_2_pandas = input_2.to_pandas()
-        # input_1_pandas['column2'] = input_1_pandas['column1'] + input_2_pandas['column1']
-        # return knext.Table.from_pandas(input_1_pandas)
-        ### Tutorial step 13: Uncomment the following line to use the parameters from the configuration dialogue (and comment out the previous return statement)
-        # input_1_pandas['column2'] = input_1_pandas['column2'] + self.double_param
-        # LOGGER.warning(self.double_param) # Tutorial step 14: Logging some warning to the console
-        # exec_context.set_warning("This is a warning") # Tutorial step 14: Set a warning to be shown in the workflow
-        # return knext.Table.from_pandas(input_1_pandas) ### Tutorial step 13: Uncomment
+    def execute(self, exec_context, input_1, input_2):
+        import pandas as pd
+        from sklearn.preprocessing import KBinsDiscretizer
+        
+        # Convertir las tablas KNIME a DataFrames
+        X = input_1.to_pandas()          # DataFrame con todas las características
+        Y_df = input_2.to_pandas()       # DataFrame con la(s) columna(s) de etiquetas
+        # Extraer la primera columna de Y como Serie (vector 1D)
+        y = Y_df.iloc[:, 0]
+        
+        k = self.k_features
+        
+        # ---- Discretización (misma que en tu proyecto) ----
+        discretizer = KBinsDiscretizer(n_bins=5, encode="ordinal", strategy="quantile")
+        X_disc = discretizer.fit_transform(X)
+        X_disc_df = pd.DataFrame(X_disc, columns=X.columns)
+        
+        # ---- Selección con fast_mRMR ----
+        selected_columns = fast_mRMR.fast_mrmr(X_disc_df, y, k)
+        
+        # Filtrar las columnas originales (no las discretizadas)
+        X_selected = X[selected_columns]
+        
+        return knext.Table.from_pandas(X_selected)
