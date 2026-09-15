@@ -1,57 +1,141 @@
+# src/extension.py
+import os
+import sys
+
+# Asegura que src/ esté en el path para que PSO.py sea importable
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
+
 import knime.extension as knext
 import pandas as pd
-import fast_mRMR
+
+from PSO import PSOFeatureSelection
+
 
 @knext.node(
-    name="mRMR Feature Selector",
+    name="PSO Feature Selector",
     node_type=knext.NodeType.LEARNER,
-    icon_path="../icons/icon.png",
-    category="/community/mRMR",
+    icon_path="../../icons/icon.png",
+    category="/community/PSO",
 )
-@knext.input_table(name="X Table", description="Tabla de características (X)")
-@knext.input_table(name="Y Table", description="Tabla de etiquetas (Y)")
-@knext.output_table(name="Selected Features", description="Tabla X con solo las columnas seleccionadas")
-class MRMRNode:
-    """
-    Nodo que aplica mRMR para seleccionar las k características más relevantes
-    de la tabla X, usando la información de la tabla Y.
+@knext.input_table(name="X Table",
+                   description="Tabla de características (X, solo columnas numéricas)")
+@knext.input_table(name="Y Table",
+                   description="Tabla de etiquetas (Y, una sola columna numérica)")
+@knext.output_table(name="Selected Features",
+                    description="Tabla X con solo las columnas seleccionadas por PSO")
+class PSONode:
+    """Selecciona características con Particle Swarm Optimization.
+
+    Tarea: **Regresión** (usa RandomForestRegressor internamente).
     """
 
-    # Parámetro en el diálogo de configuración
-    k_features = knext.IntParameter(
-        label="Número de características",
-        description="Cantidad de features a seleccionar con mRMR",
-        default_value=5,
+    swarm_size = knext.IntParameter(
+        label="Tamaño del enjambre",
+        description="Número de partículas del PSO",
+        default_value=30,
+        min_value=5,
+    )
+
+    iterations = knext.IntParameter(
+        label="Iteraciones",
+        description="Número de iteraciones del PSO",
+        default_value=50,
         min_value=1,
     )
 
+    w = knext.DoubleParameter(
+        label="Inercia (w)",
+        description="Coeficiente de inercia",
+        default_value=0.7,
+        min_value=0.0,
+        max_value=1.0,
+    )
+
+    c1 = knext.DoubleParameter(
+        label="Cognitivo (c1)",
+        description="Peso del mejor personal",
+        default_value=1.5,
+        min_value=0.0,
+        max_value=4.0,
+    )
+
+    c2 = knext.DoubleParameter(
+        label="Social (c2)",
+        description="Peso del mejor global",
+        default_value=1.5,
+        min_value=0.0,
+        max_value=4.0,
+    )
+
+    cv_folds = knext.IntParameter(
+        label="Folds de validación cruzada",
+        description="Número de particiones para cross_val_score",
+        default_value=5,
+        min_value=2,
+    )
+
+    max_features = knext.IntParameter(
+        label="Máximo de descriptores",
+        description=("Número máximo de descriptores a seleccionar. "
+                     "Usa 0 para modo umbral (sin límite)."),
+        default_value=10,
+        min_value=0,
+    )
+
+    threshold = knext.DoubleParameter(
+        label="Umbral (solo modo sin límite)",
+        description="Umbral para binarizar la posición si max_features=0",
+        default_value=0.5,
+        min_value=0.0,
+        max_value=1.0,
+    )
+
+    random_seed = knext.IntParameter(
+        label="Semilla aleatoria",
+        description="Semilla para reproducibilidad",
+        default_value=42,
+        min_value=0,
+    )
+
     def configure(self, configure_context, input_schema_1, input_schema_2):
-        # Devolvemos el mismo esquema de X (primer puerto) sin cambios
-        # (mismo número de columnas, solo filtramos en ejecución)
-        # return input_schema_1
         return None
 
     def execute(self, exec_context, input_1, input_2):
-        import pandas as pd
-        from sklearn.preprocessing import KBinsDiscretizer
-        
-        # Convertir las tablas KNIME a DataFrames
-        X = input_1.to_pandas()          # DataFrame con todas las características
-        Y_df = input_2.to_pandas()       # DataFrame con la(s) columna(s) de etiquetas
-        # Extraer la primera columna de Y como Serie (vector 1D)
-        y = Y_df.iloc[:, 0]
-        
-        k = self.k_features
-        
-        # ---- Discretización (misma que en tu proyecto) ----
-        discretizer = KBinsDiscretizer(n_bins=5, encode="ordinal", strategy="quantile")
-        X_disc = discretizer.fit_transform(X)
-        X_disc_df = pd.DataFrame(X_disc, columns=X.columns)
-        
-        # ---- Selección con fast_mRMR ----
-        selected_columns = fast_mRMR.fast_mrmr(X_disc_df, y, k)
-        
-        # Filtrar las columnas originales (no las discretizadas)
-        X_selected = X[selected_columns]
-        
+        X_df = input_1.to_pandas()
+        Y_df = input_2.to_pandas()
+
+        if Y_df.shape[1] < 1:
+            raise ValueError("La tabla Y debe contener al menos una columna.")
+        if Y_df.shape[1] > 1:
+            print(f"[PSO] Advertencia: Y tiene {Y_df.shape[1]} columnas, "
+                  f"se usará la primera: '{Y_df.columns[0]}'")
+
+        y = Y_df.iloc[:, 0].values
+
+        max_features = self.max_features if self.max_features > 0 else None
+
+        pso = PSOFeatureSelection(
+            swarm_size=self.swarm_size,
+            iterations=self.iterations,
+            w=self.w,
+            c1=self.c1,
+            c2=self.c2,
+            cv_folds=self.cv_folds,
+            scoring='r2',
+            max_features=max_features,
+            random_seed=self.random_seed,
+            threshold=self.threshold,
+        )
+
+        best_mask, best_score, best_features, history = pso.optimize(X_df, y)
+
+        if len(best_features) == 0:
+            raise ValueError(
+                "PSO no seleccionó ninguna característica. "
+                "Prueba con más iteraciones o revisa la tabla X."
+            )
+
+        X_selected = X_df[best_features]
         return knext.Table.from_pandas(X_selected)
