@@ -8,10 +8,17 @@
 
 import numpy as np
 import pandas as pd
-from sklearn.feature_selection import mutual_info_regression
+from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
 
 
-def fast_mrmr(X, y, num_features_wanted):
+def fast_mrmr(
+    X,
+    y,
+    num_features_wanted,
+    n_neighbors=3,
+    random_state=42,
+    target_type="Regression",
+):
     #X: matriz de variables
     #y: Actividades
     #num_features_wanted: num. final de caracteristicas
@@ -24,11 +31,23 @@ def fast_mrmr(X, y, num_features_wanted):
     # 3: selectedFeatures = ();
     selected_features = []
 
+    if target_type == "Regression":
+        mutual_information = mutual_info_regression
+    elif target_type == "Classification":
+        mutual_information = mutual_info_classif
+    else:
+        raise ValueError("target_type must be 'Regression' or 'Classification'")
+
     # --- [Líneas 4 a 7 del Pseudo-código] ---
     # 4: for each feature f in candidates do
     # 5: relevancesVector[f] = mutualInfo(f, class);
     # Usamos mutual_info_regression para capturar relaciones continuas
-    relevances = mutual_info_regression(X, y)
+    relevances = mutual_information( 
+        X,
+        y,
+        n_neighbors=n_neighbors,
+        random_state=random_state,
+    )
     relevances_dict = dict(zip(candidates, relevances))
 
     # 6: accumulateRedundancy[f] = 0;
@@ -60,7 +79,12 @@ def fast_mrmr(X, y, num_features_wanted):
         # Pre-calculamos el MI de la última seleccionada contra todas las candidatas
         # para optimizar el rendimiento (es la esencia del "Fast")
         last_feat_data = X[last_feature_selected].values.reshape(-1, 1)
-        mi_with_last = mutual_info_regression(X[candidates], last_feat_data.ravel())
+        mi_with_last = mutual_information(
+            X[candidates],
+            last_feat_data.ravel(),
+            n_neighbors=n_neighbors,
+            random_state=random_state,
+        )
         mi_dict_last = dict(zip(candidates, mi_with_last))
 
         # 14: for each feature fc in candidates do

@@ -25,11 +25,39 @@ class MRMRNode:
         description="Select the column to use as the target variable",
     )
 
+    target_type = knext.StringParameter(
+        label="Target type",
+        description="Select whether the target variable is continuous or categorical",
+        default_value="Regression",
+        enum=["Regression", "Classification"],
+    )
+
     k_features = knext.IntParameter(
         label="Number of features",
         description="Number of features to select with mRMR",
         default_value=5,
         min_value=1,
+    )
+
+    n_neighbors = knext.IntParameter(
+        label="Number of neighbors",
+        description="Number of nearest neighbors used to estimate mutual information",
+        default_value=3,
+        min_value=1,
+    )
+
+    random_state = knext.IntParameter(
+        label="Random seed",
+        description="Seed used to make mutual information estimates reproducible",
+        default_value=42,
+        min_value=0,
+    )
+
+    n_bins = knext.IntParameter(
+        label="Number of bins",
+        description="Number of bins used to discretize the input features",
+        default_value=5,
+        min_value=2,
     )
 
     def configure(self, configure_context, input_schema):
@@ -45,11 +73,22 @@ class MRMRNode:
         
         k = self.k_features
         
-        discretizer = KBinsDiscretizer(n_bins=5, encode="ordinal", strategy="quantile")
+        discretizer = KBinsDiscretizer(
+            n_bins=self.n_bins,
+            encode="ordinal",
+            strategy="quantile",
+        )
         X_disc = discretizer.fit_transform(X)
         X_disc_df = pd.DataFrame(X_disc, columns=X.columns)
         
-        selected_columns = fast_mRMR.fast_mrmr(X_disc_df, y, k)
+        selected_columns = fast_mRMR.fast_mrmr(
+            X_disc_df,
+            y,
+            k,
+            n_neighbors=self.n_neighbors,
+            random_state=self.random_state,
+            target_type=self.target_type,
+        )
         
         X_selected = X[selected_columns]
         
